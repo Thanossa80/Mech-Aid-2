@@ -3,12 +3,26 @@ from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, Integer, String, Float
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
 
-engine = create_engine("sqlite:///mechanics.db")
+"""
+DATABASE CONNECTION
+"""
+
+DATABASE_URL = "sqlite:///mechanics.db"
+engine = create_engine(
+    DATABASE_URL,
+    connect_args={"check_same_thread": False}
+)
+SessionLocal = sessionmaker(
+    autocommit=False, 
+    autoflush=False, 
+    bind=engine
+)
 
 Base = declarative_base()
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
+"""
+DATABASE TABLE
+"""
 
 class MechanicDB(Base):
     __tablename__ = "mechanics"
@@ -20,9 +34,11 @@ class MechanicDB(Base):
     lng = Column(Float)
     phone = Column(String)
 
-
 Base.metadata.create_all(bind=engine)
 
+""""
+DATABASE SEESION
+""""
 
 def get_db():
     db = SessionLocal()
@@ -30,12 +46,11 @@ def get_db():
         yield db
     finally:
         db.close()
+""""
+PYDANTIC MODELS
+""""
 
-
-app = FastAPI()
-
-
-class Mechanic(BaseModel):
+class MechanicCreate(BaseModel):
     id: int
     name: str
     service: str
@@ -43,69 +58,128 @@ class Mechanic(BaseModel):
     lng: float
     phone: str
 
+class MechanicUpdate(BaseModel):
+    id: int
+    name: str
+    service: str
+    lat: float
+    lng: float
+    phone: str
 
-INITIAL_MECHANICS = [
-    {"id": 1, "name": "John Doe", "service": "Engine Repair", "lat": 37.4421, "lng": 122.3342, "phone": "123-456-789"},
-    {"id": 2, "name": "Kwame Bonsu", "service": "Brake Repair/Replacement", "lat": 24.4366, "lng": 145.3456, "phone": "213-546-987"},
-    {"id": 3, "name": "Mike Wale", "service": "Car Air-conditioning", "lat": 43.2234, "lng": 113.5643, "phone": "113-564-987"},
-]
+class MechanicResponse(BaseModel):
+    id: int
+    name: str
+    service: str
+    lat: float
+    lng: float
+    phone: str
 
-
-@app.on_event("startup")
-def seed_database():
-    db = SessionLocal()
-    try:
-        if db.query(MechanicDB).count() == 0:
-            db.bulk_insert_mappings(MechanicDB, INITIAL_MECHANICS)
-            db.commit()
-    finally:
-        db.close()
-
+    model_config = {
+        "from_attributes": True
+    }
+""""
+FASTAPI APPLICATION
+""""
+app = FastAPI()
 
 @app.get("/")
 def home():
     return {"message": "Welcome to the Mechanics API"}
 
-
+""""
+GET ALL MECHANICS
+""""
 @app.get("/mechanics")
 def get_mechanics(db: Session = Depends(get_db)):
     return db.query(MechanicDB).all()
-
+"""""
+GET ONE MECHANIC
+"""""
 
 @app.get("/mechanics/{mechanic_id}")
-def get_mechanic(mechanic_id: int, db: Session = Depends(get_db)):
-    mechanic = db.query(MechanicDB).filter(MechanicDB.id == mechanic_id).first()
-    if mechanic:
-        return mechanic
-    raise HTTPException(status_code=404, detail="Mechanic not found")
+def get_mechanic(
+    mechanic_id: int, 
+    db: Session = Depends(get_db)
+):
+    mechanic = (
+        db.query(MechanicDB)
+        .filter(MechanicDB.id == mechanic_id)
+        .first()
+    )   
+    if mechanic is None:
+        raise HTTPException(
+            status_code=404, 
+            detail="Mechanic not found"
+        )
+    return mechanic
 
+""""
+ADD A MECHANIC
+""""
 
-@app.post("/mechanics")
-def add_mechanic(mechanic: Mechanic, db: Session = Depends(get_db)):
+@app.post(
+    "/mechanics",
+    response_model=MechanicResponse,
+    status_code+status.HTTP_201_CREATED
+)
+def add_mechanic(
+    mechanic: Mechanic, 
+    db: Session = Depends(get_db)
+):
     db_mechanic = MechanicDB(**mechanic.model_dump())
     db.add(db_mechanic)
     db.commit()
     db.refresh(db_mechanic)
-    return {"message": "Mechanic added successfully", "mechanic": db_mechanic}
+    
+    return db_mechanic
 
-
+""""
+DELETE A MECHANIC
+""""
 @app.delete("/mechanics/{mechanic_id}")
-def delete_mechanic(mechanic_id: int, db: Session = Depends(get_db)):
-    mechanic = db.query(MechanicDB).filter(MechanicDB.id == mechanic_id).first()
-    if not mechanic:
-        raise HTTPException(status_code=404, detail="Mechanic not found")
+def delete_mechanic(
+    mechanic_id: int,
+    db: Session = Depends(get_db)
+):
+    mechanic = (db.query(MechanicDB)
+    .filter(MechanicDB.id == mechanic_id)
+    .first()
+    )
+    if mechanic is None:
+        raise HTTPException(
+            status_code=404, 
+            detail="Mechanic not found"
+        )
     db.delete(mechanic)
     db.commit()
+    
     return {"message": "Mechanic deleted successfully"}
 
+""""
+UPDATE A MECHANIC
+""""
 
-@app.put("/mechanics/{mechanic_id}")
-def update_mechanic(mechanic_id: int, updated_mechanic: Mechanic, db: Session = Depends(get_db)):
-    mechanic = db.query(MechanicDB).filter(MechanicDB.id == mechanic_id).first()
-    if not mechanic:
-        raise HTTPException(status_code=404, detail="Mechanic not found")
+@app.put("/mechanics/{mechanic_id}",
+        response_model=MechanicResponse
+)
+
+def update_mechanic(
+    mechanic_id: int, 
+    updated_mechanic: Mechanic,
+    db: Session = Depends(get_db)
+):
+    mechanic = (
+        db.query(MechanicDB)
+        .filter(MechanicDB.id == mechanic_id)
+        .first()
+    )
+    if mechanic is None:
+        raise HTTPException(
+            status_code=404, 
+            detail="Mechanic not found"
+        )
     for key, value in updated_mechanic.model_dump().items():
         setattr(mechanic, key, value)
     db.commit()
     db.refresh(mechanic)
-    return {"message": "Mechanic updated successfully", "mechanic": mechanic}
+    return mechanic
